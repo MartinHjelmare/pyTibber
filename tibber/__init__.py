@@ -98,11 +98,11 @@ class Tibber:
             resp = await self.websession.post(
                 API_ENDPOINT,
                 headers={
-                    "Authorization": "Bearer " + self._access_token,
+                    "Authorization": f"Bearer {self._access_token}",
                     aiohttp.hdrs.USER_AGENT: self._user_agent,
                 },
                 data=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                timeout=aiohttp.ClientTimeout(total=timeout),
             )
             return (await extract_response_data(resp)).get("data")
         except (TimeoutError, aiohttp.ClientError) as err:
