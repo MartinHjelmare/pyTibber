@@ -448,7 +448,7 @@ class TibberHome:
                 if self._rt_stopped:
                     _LOGGER.debug("Stopping rt_subscribe")
                     return
-                if self._tibber_control.realtime.subscription_running:
+                if self._tibber_control.ws.subscription_running:
                     break
 
                 _LOGGER.debug("Waiting for rt_connect")
@@ -458,7 +458,7 @@ class TibberHome:
                 return
 
             try:
-                async for _data in self._tibber_control.realtime.sub_manager.session.subscribe(
+                async for _data in self._tibber_control.ws.sub_manager.session.subscribe(
                     gql(LIVE_SUBSCRIBE % self.home_id),
                 ):
                     data = {"data": _data}
@@ -471,15 +471,15 @@ class TibberHome:
                         self.home_id,
                         data,
                     )
-                    if self._rt_stopped or not self._tibber_control.realtime.subscription_running:
+                    if self._rt_stopped or not self._tibber_control.ws.subscription_running:
                         _LOGGER.debug("Stopping rt_subscribe loop")
                         return
             except Exception:
                 _LOGGER.exception("Error in rt_subscribe")
 
         self._rt_callback = callback
-        self._tibber_control.realtime.add_home(self)
-        await self._tibber_control.realtime.connect()
+        self._tibber_control.ws.add_home(self)
+        await self._tibber_control.ws.connect()
         self._rt_listener = asyncio.create_task(_start())
         self._rt_stopped = False
 
@@ -510,7 +510,7 @@ class TibberHome:
     @property
     def rt_subscription_running(self) -> bool:
         """Is real time subscription running."""
-        if not self._tibber_control.realtime.subscription_running:
+        if not self._tibber_control.ws.subscription_running:
             return False
         return not self._last_rt_data_received < dt.datetime.now(tz=dt.UTC) - dt.timedelta(seconds=60)
 

@@ -19,7 +19,7 @@ LOCK_CONNECT = asyncio.Lock()
 _LOGGER = logging.getLogger(__name__)
 
 
-class TibberRT:
+class TibberWebsocket:
     """Class to handle real time connection with the Tibber api."""
 
     def __init__(self, access_token: str, timeout: int, user_agent: str, ssl: SSLContext | bool) -> None:

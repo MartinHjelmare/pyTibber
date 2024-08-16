@@ -18,7 +18,7 @@ from .exceptions import (
 )
 from .gql_queries import INFO, PUSH_NOTIFICATION
 from .home import TibberHome
-from .websocket import TibberRT
+from .websocket import TibberWebsocket
 from .response_handler import extract_response_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class Tibber:
         self.timeout: int = timeout
         self._access_token: str = access_token
 
-        self.realtime: TibberRT = TibberRT(
+        self.ws = TibberWebsocket(
             self._access_token,
             self.timeout,
             self._user_agent,
@@ -145,7 +145,7 @@ class Tibber:
 
         if sub_endpoint := viewer.get("websocketSubscriptionUrl"):
             _LOGGER.debug("Using websocket subscription url %s", sub_endpoint)
-            self.realtime.sub_endpoint = sub_endpoint
+            self.ws.sub_endpoint = sub_endpoint
 
         self._name = viewer.get("name")
         self._user_id = viewer.get("userId")
@@ -224,7 +224,7 @@ class Tibber:
         """Stop subscription manager.
         This method simply calls the stop method of the SubscriptionManager if it is defined.
         """
-        return await self.realtime.disconnect()
+        return await self.ws.disconnect()
 
     @property
     def user_id(self) -> str | None:
