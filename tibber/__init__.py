@@ -18,7 +18,7 @@ from .exceptions import (
 )
 from .gql_queries import INFO, PUSH_NOTIFICATION
 from .home import TibberHome
-from .realtime import TibberRT
+from .websocket import TibberRT
 from .response_handler import extract_response_data
 
 _LOGGER = logging.getLogger(__name__)
