@@ -5,21 +5,17 @@ import datetime as dt
 import logging
 import zoneinfo
 from ssl import SSLContext
-from typing import Any
 
 import aiohttp
 
-from .const import API_ENDPOINT, DEFAULT_TIMEOUT, DEMO_TOKEN, __version__
+from .const import DEFAULT_TIMEOUT, DEMO_TOKEN, __version__
 from .exceptions import (
-    FatalHttpExceptionError,
-    InvalidLoginError,
-    RetryableHttpExceptionError,
     UserAgentMissingError,
 )
 from .gql_queries import INFO, PUSH_NOTIFICATION
 from .home import TibberHome
+from .rest import TibberREST
 from .websocket import TibberWebsocket
-from .response_handler import extract_response_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,13 +48,10 @@ class Tibber:
         if user_agent is None:
             raise UserAgentMissingError("Please provide value for HTTP user agent")
         self._user_agent: str = f"{user_agent} pyTibber/{__version__}"
-        self.websession = websession
-        self.timeout: int = timeout
-        self._access_token: str = access_token
-
+        self.rest = TibberREST(access_token, timeout, self._user_agent, websession)
         self.ws = TibberWebsocket(
-            self._access_token,
-            self.timeout,
+            access_token,
+            timeout,
             self._user_agent,
             ssl=ssl,
         )
@@ -70,74 +63,9 @@ class Tibber:
         self._all_home_ids: list[str] = []
         self._homes: dict[str, TibberHome] = {}
 
-    async def close_connection(self) -> None:
-        """Close the Tibber connection.
-        This method simply closes the websession used by the object.
-        """
-        await self.websession.close()
-
-    async def execute(
-        self,
-        document: str,
-        variable_values: dict[Any, Any] | None = None,
-        timeout: int | None = None,  # noqa: ASYNC109
-        retry: int = 3,
-    ) -> dict[Any, Any] | None:
-        """Execute a GraphQL query and return the data.
-
-        :param document: The GraphQL query to request.
-        :param variable_values: The GraphQL variables to parse with the request.
-        :param timeout: The timeout to use for the request.
-        :param retry: The number of times to retry the request.
-        """
-        timeout = timeout or self.timeout
-
-        payload = {"query": document, "variables": variable_values or {}}
-
-        try:
-            resp = await self.websession.post(
-                API_ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {self._access_token}",
-                    aiohttp.hdrs.USER_AGENT: self._user_agent,
-                },
-                data=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            )
-            return (await extract_response_data(resp)).get("data")
-        except (TimeoutError, aiohttp.ClientError) as err:
-            if retry > 0:
-                return await self.execute(
-                    document,
-                    variable_values,
-                    timeout,
-                    retry - 1,
-                )
-            if isinstance(err, asyncio.TimeoutError):
-                _LOGGER.error("Timed out when connecting to Tibber")
-            else:
-                _LOGGER.exception("Error connecting to Tibber")
-            raise
-        except (InvalidLoginError, FatalHttpExceptionError) as err:
-            _LOGGER.error(
-                "Fatal error interacting with Tibber API, HTTP status: %s. API error: %s / %s",
-                err.status,
-                err.extension_code,
-                err.message,
-            )
-            raise
-        except RetryableHttpExceptionError as err:
-            _LOGGER.warning(
-                "Temporary failure interacting with Tibber API, HTTP status: %s. API error: %s / %s",
-                err.status,
-                err.extension_code,
-                err.message,
-            )
-            raise
-
     async def update_info(self) -> None:
         """Updates home info asynchronously."""
-        if (data := await self.execute(INFO)) is None:
+        if (data := await self.rest.execute(INFO)) is None:
             return
 
         if not (viewer := data.get("viewer")):
@@ -186,7 +114,7 @@ class Tibber:
         :param message: The message of the push notification.
         """
         if not (
-            res := await self.execute(
+            res := await self.rest.execute(
                 PUSH_NOTIFICATION.format(
                     title,
                     message,

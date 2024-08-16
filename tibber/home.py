@@ -71,6 +71,7 @@ class TibberHome:
             this instance of TibberHome.
         """
         self._tibber_control = tibber_control
+        self._execute = tibber_control.rest.execute
         self._home_id: str = home_id
         self._current_price_total: float | None = None
         self._current_price_info: dict[str, float] = {}
@@ -198,19 +199,19 @@ class TibberHome:
 
     async def update_info(self) -> None:
         """Update home info and the current price info asynchronously."""
-        if data := await self._tibber_control.execute(UPDATE_INFO % self._home_id):
+        if data := await self._execute(UPDATE_INFO % self._home_id):
             self.info = data
 
     async def update_info_and_price_info(self) -> None:
         """Update home info and all price info asynchronously."""
-        if data := await self._tibber_control.execute(UPDATE_INFO_PRICE % self._home_id):
+        if data := await self._execute(UPDATE_INFO_PRICE % self._home_id):
             self.info = data
             self._process_price_info(self.info)
 
     async def update_current_price_info(self) -> None:
         """Update just the current price info asynchronously."""
         query = UPDATE_CURRENT_PRICE % self.home_id
-        price_info_temp = await self._tibber_control.execute(query)
+        price_info_temp = await self._execute(query)
         if not price_info_temp:
             _LOGGER.error("Could not find current price info.")
             return
@@ -228,7 +229,7 @@ class TibberHome:
         """Update the current price info, todays price info
         and tomorrows price info asynchronously.
         """
-        if price_info := await self._tibber_control.execute(PRICE_INFO % self.home_id):
+        if price_info := await self._execute(PRICE_INFO % self.home_id):
             self._process_price_info(price_info)
 
     def _process_price_info(self, price_info: dict[str, dict[str, Any]]) -> None:
@@ -537,7 +538,7 @@ class TibberHome:
             "profit" if production else "totalCost cost",
             "",
         )
-        if not (data := await self._tibber_control.execute(query, timeout=30)):
+        if not (data := await self._execute(query, timeout=30)):
             _LOGGER.error("Could not get the data.")
             return []
         data = data["viewer"]["home"][cons_or_prod_str]
@@ -578,7 +579,7 @@ class TibberHome:
             date_from_base64,
         )
 
-        if not (data := await self._tibber_control.execute(query, timeout=30)):
+        if not (data := await self._execute(query, timeout=30)):
             _LOGGER.error("Could not get the data.")
             return []
 
@@ -602,7 +603,7 @@ class TibberHome:
             self.home_id,
             resolution,
         )
-        if not (data := await self._tibber_control.execute(query)):
+        if not (data := await self._execute(query)):
             _LOGGER.error("Could not get the price data.")
             return None
         return data["viewer"]["home"]["currentSubscription"]["priceRating"][resolution]["entries"]

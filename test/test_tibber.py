@@ -95,7 +95,7 @@ async def test_tibber_invalid_query():
         )
 
         with pytest.raises(FatalHttpExceptionError, match="Syntax Error*"):
-            await tibber_connection.execute("invalidquery")
+            await tibber_connection.rest.execute("invalidquery")
 
         assert not tibber_connection.name
         assert tibber_connection.get_homes() == []
