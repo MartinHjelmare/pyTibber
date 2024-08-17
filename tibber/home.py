@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from gql import gql
 
 from .const import RESOLUTION_HOURLY
+from .exceptions import WebsocketReconnectedError, WebsocketTransportError
 from .gql_queries import (
     HISTORIC_DATA,
     HISTORIC_DATA_DATE,
@@ -72,7 +73,7 @@ class TibberHome:
         """
         self._tibber_control = tibber_control
         self._execute = tibber_control.rest.execute
-        self._home_id: str = home_id
+        self._home_id = home_id
         self._current_price_total: float | None = None
         self._current_price_info: dict[str, float] = {}
         self._price_info: dict[str, float] = {}
@@ -81,12 +82,11 @@ class TibberHome:
         self.info: dict[str, dict[Any, Any]] = {}
         self.last_data_timestamp: dt.datetime | None = None
 
-        self._hourly_consumption_data: HourlyData = HourlyData()
-        self._hourly_production_data: HourlyData = HourlyData(production=True)
-        self._last_rt_data_received: dt.datetime = dt.datetime.now(tz=dt.UTC)
-        self._rt_listener: None | asyncio.Task[Any] = None
+        self._hourly_consumption_data = HourlyData()
+        self._hourly_production_data = HourlyData(production=True)
+        self._rt_listener: asyncio.Task[Any] | None = None
         self._rt_callback: Callable[..., Any] | None = None
-        self._rt_stopped: bool = True
+        self._resubscribe_task: asyncio.Task[None] | None = None
 
     async def _fetch_data(self, hourly_data: HourlyData) -> None:
         """Update hourly consumption or production data asynchronously."""
@@ -184,7 +184,7 @@ class TibberHome:
 
     @property
     def last_cons_data_timestamp(self) -> dt.datetime | None:
-        """Get last consumption data timestampt."""
+        """Get last consumption data timestamp."""
         return self._hourly_consumption_data.last_data_timestamp
 
     @property
@@ -321,7 +321,7 @@ class TibberHome:
 
     @property
     def address1(self) -> str:
-        """Return the home adress1."""
+        """Return the home address1."""
         try:
             return self.info["viewer"]["home"]["address"]["address1"]
         except (KeyError, TypeError):
@@ -410,99 +410,89 @@ class TibberHome:
 
         :param callback: The function to call when data is received.
         """
-
-        def _add_extra_data(data: dict[str, Any]) -> dict[str, Any]:
-            live_data = data["data"]["liveMeasurement"]
-            _timestamp = dt.datetime.fromisoformat(live_data["timestamp"]).astimezone(self._tibber_control.time_zone)
-            while self._rt_power and self._rt_power[0][0] < _timestamp - dt.timedelta(minutes=5):
-                self._rt_power.pop(0)
-
-            self._rt_power.append((_timestamp, live_data["power"] / 1000))
-            if "lastMeterProduction" in live_data:
-                live_data["lastMeterProduction"] = max(0, live_data["lastMeterProduction"])
-
-            if (
-                (power_production := live_data.get("powerProduction"))
-                and power_production > 0
-                and live_data.get("power") is None
-            ):
-                live_data["power"] = 0
-
-            if live_data.get("power", 0) > 0 and live_data.get("powerProduction") is None:
-                live_data["powerProduction"] = 0
-
-            current_hour = live_data["accumulatedConsumptionLastHour"]
-            if current_hour is not None:
-                power = sum(p[1] for p in self._rt_power) / len(self._rt_power)
-                live_data["estimatedHourConsumption"] = round(
-                    current_hour + power * (3600 - (_timestamp.minute * 60 + _timestamp.second)) / 3600,
-                    3,
-                )
-                if self._hourly_consumption_data.peak_hour and current_hour > self._hourly_consumption_data.peak_hour:
-                    self._hourly_consumption_data.peak_hour = round(current_hour, 2)
-                    self._hourly_consumption_data.peak_hour_time = _timestamp
-            return data
-
-        async def _start() -> None:
-            """Subscribe to Tibber."""
-            for _ in range(30):
-                if self._rt_stopped:
-                    _LOGGER.debug("Stopping rt_subscribe")
-                    return
-                if self._tibber_control.ws.subscription_running:
-                    break
-
-                _LOGGER.debug("Waiting for rt_connect")
-                await asyncio.sleep(1)
-            else:
-                _LOGGER.error("rt not running")
-                return
-
-            try:
-                async for _data in self._tibber_control.ws.sub_manager.session.subscribe(
-                    gql(LIVE_SUBSCRIBE % self.home_id),
-                ):
-                    data = {"data": _data}
-                    with contextlib.suppress(KeyError):
-                        data = _add_extra_data(data)
-                    callback(data)
-                    self._last_rt_data_received = dt.datetime.now(tz=dt.UTC)
-                    _LOGGER.debug(
-                        "Data received for %s: %s",
-                        self.home_id,
-                        data,
-                    )
-                    if self._rt_stopped or not self._tibber_control.ws.subscription_running:
-                        _LOGGER.debug("Stopping rt_subscribe loop")
-                        return
-            except Exception:
-                _LOGGER.exception("Error in rt_subscribe")
-
         self._rt_callback = callback
-        self._tibber_control.ws.add_home(self)
         await self._tibber_control.ws.connect()
-        self._rt_listener = asyncio.create_task(_start())
-        self._rt_stopped = False
+        self._rt_listener = asyncio.create_task(self._start_listen(callback))
+
+    async def _start_listen(self, callback: Callable[..., Any]) -> None:
+        """Subscribe to Tibber."""
+        try:
+            async for _data in self._tibber_control.ws.subscribe(gql(LIVE_SUBSCRIBE % self.home_id)):
+                data = {"data": _data}
+                with contextlib.suppress(KeyError):
+                    data = self._add_extra_data(data)
+                _LOGGER.debug(
+                    "Data received for %s: %s",
+                    self.home_id,
+                    data,
+                )
+                callback(data)
+        except WebsocketReconnectedError:
+            self._rt_listener = asyncio.create_task(self._start_listen(callback))
+        except Exception as err:  # pylint: disable=broad-except
+            if not isinstance(err, WebsocketTransportError):
+                _LOGGER.exception("Error in rt_subscribe")
+            if self._resubscribe_task is not None:
+                self._resubscribe_task.cancel()
+            self._resubscribe_task = asyncio.create_task(self.rt_resubscribe())
+            self._rt_listener = None
+
+    def _add_extra_data(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Add extra data to live subscription result."""
+        live_data = data["data"]["liveMeasurement"]
+        _timestamp = dt.datetime.fromisoformat(live_data["timestamp"]).astimezone(self._tibber_control.time_zone)
+        while self._rt_power and self._rt_power[0][0] < _timestamp - dt.timedelta(minutes=5):
+            self._rt_power.pop(0)
+
+        self._rt_power.append((_timestamp, live_data["power"] / 1000))
+        if "lastMeterProduction" in live_data:
+            live_data["lastMeterProduction"] = max(0, live_data["lastMeterProduction"])
+
+        if (
+            (power_production := live_data.get("powerProduction"))
+            and power_production > 0
+            and live_data.get("power") is None
+        ):
+            live_data["power"] = 0
+
+        if live_data.get("power", 0) > 0 and live_data.get("powerProduction") is None:
+            live_data["powerProduction"] = 0
+
+        current_hour = live_data["accumulatedConsumptionLastHour"]
+        if current_hour is not None:
+            power = sum(p[1] for p in self._rt_power) / len(self._rt_power)
+            live_data["estimatedHourConsumption"] = round(
+                current_hour + power * (3600 - (_timestamp.minute * 60 + _timestamp.second)) / 3600,
+                3,
+            )
+            if self._hourly_consumption_data.peak_hour and current_hour > self._hourly_consumption_data.peak_hour:
+                self._hourly_consumption_data.peak_hour = round(current_hour, 2)
+                self._hourly_consumption_data.peak_hour_time = _timestamp
+        return data
 
     async def rt_resubscribe(self) -> None:
         """Resubscribe to Tibber data."""
-        self.rt_unsubscribe()
-        _LOGGER.debug("Resubscribe, %s", self.home_id)
-        await asyncio.gather(
-            *[
-                self.update_info(),
-                self._tibber_control.update_info(),
-            ],
-        )
         if self._rt_callback is None:
-            _LOGGER.warning("No callback set for rt_resubscribe")
+            raise RuntimeError("No callback set for rt_resubscribe, call rt_subscribe first")
+
+        self.rt_unsubscribe()
+        if not self._tibber_control.ws.reconnecting_task_in_progress:
             return
+
+        _LOGGER.debug("Resubscribe, %s", self.home_id)
+        await self.update_info()  # Update home info to check if real time is enabled
+        if not self.has_real_time_consumption:
+            _LOGGER.debug("Home %s does not have real time consumption enabled", self.home_id)
+            return
+
+        # Update info to set websocket subscription url
+        await self._tibber_control.update_info()
+
         await self.rt_subscribe(self._rt_callback)
 
     def rt_unsubscribe(self) -> None:
         """Unsubscribe to Tibber data."""
         _LOGGER.debug("Unsubscribe, %s", self.home_id)
-        self._rt_stopped = True
         if self._rt_listener is None:
             return
         self._rt_listener.cancel()
@@ -511,9 +501,7 @@ class TibberHome:
     @property
     def rt_subscription_running(self) -> bool:
         """Is real time subscription running."""
-        if not self._tibber_control.ws.subscription_running:
-            return False
-        return not self._last_rt_data_received < dt.datetime.now(tz=dt.UTC) - dt.timedelta(seconds=60)
+        return self._tibber_control.ws.connected and self._rt_listener is not None
 
     async def get_historic_data(
         self,

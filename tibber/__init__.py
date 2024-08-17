@@ -72,8 +72,7 @@ class Tibber:
             return
 
         if sub_endpoint := viewer.get("websocketSubscriptionUrl"):
-            _LOGGER.debug("Using websocket subscription url %s", sub_endpoint)
-            self.ws.sub_endpoint = sub_endpoint
+            self.ws.set_subscription_endpoint(sub_endpoint)
 
         self._name = viewer.get("name")
         self._user_id = viewer.get("userId")
@@ -152,7 +151,7 @@ class Tibber:
         """Stop subscription manager.
         This method simply calls the stop method of the SubscriptionManager if it is defined.
         """
-        return await self.ws.disconnect()
+        await self.ws.disconnect()
 
     @property
     def user_id(self) -> str | None:
