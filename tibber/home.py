@@ -8,7 +8,7 @@ import contextlib
 import datetime as dt
 import logging
 import warnings
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from gql import gql
 
@@ -213,13 +213,8 @@ class TibberHome:
         """Update just the current price info asynchronously."""
         query = UPDATE_CURRENT_PRICE % self.home_id
         price_info_temp = await self._execute(query)
-        if not price_info_temp:
-            _LOGGER.error("Could not find current price info.")
-            return
         try:
-            home = price_info_temp["viewer"]["home"]
-            current_subscription = home["currentSubscription"]
-            price_info = current_subscription["priceInfo"]["current"]
+            price_info = price_info_temp["viewer"]["home"]["currentSubscription"]["priceInfo"]["current"]
         except (KeyError, TypeError):
             _LOGGER.error("Could not find current price info.")
             return
@@ -240,9 +235,6 @@ class TibberHome:
 
         :param price_info: Price info to retrieve data from.
         """
-        if not price_info:
-            _LOGGER.error("Could not find price info.")
-            return
         self._price_info = {}
         self._level_info = {}
         for key in ["current", "today", "tomorrow"]:
@@ -305,7 +297,7 @@ class TibberHome:
         ]
 
     @property
-    def has_real_time_consumption(self) -> None | bool:
+    def has_real_time_consumption(self) -> bool | None:
         """Return home id."""
         try:
             return self.info["viewer"]["home"]["features"]["realTimeConsumptionEnabled"]
@@ -318,16 +310,16 @@ class TibberHome:
         try:
             return bool(self.info["viewer"]["home"]["meteringPointData"]["productionEan"])
         except (KeyError, TypeError):
-            return False
+            return None
 
     @property
-    def address1(self) -> str:
+    def address1(self) -> str | None:
         """Return the home address1."""
         try:
-            return self.info["viewer"]["home"]["address"]["address1"]
+            address = cast(str, self.info["viewer"]["home"]["address"]["address1"])
         except (KeyError, TypeError):
-            _LOGGER.error("Could not find address1.")
-        return ""
+            return None
+        return address
 
     @property
     def consumption_unit(self) -> str:
@@ -335,37 +327,36 @@ class TibberHome:
         return "kWh"
 
     @property
-    def currency(self) -> str:
+    def currency(self) -> str | None:
         """Return the currency."""
         try:
-            return self.info["viewer"]["home"]["currentSubscription"]["priceInfo"]["current"]["currency"]
+            currency = cast(str, self.info["viewer"]["home"]["currentSubscription"]["priceInfo"]["current"]["currency"])
         except (KeyError, TypeError, IndexError):
-            _LOGGER.error("Could not find currency.")
-        return ""
+            return None
+        return currency
 
     @property
-    def country(self) -> str:
+    def country(self) -> str | None:
         """Return the country."""
         try:
-            return self.info["viewer"]["home"]["address"]["country"]
+            country = cast(str, self.info["viewer"]["home"]["address"]["country"])
         except (KeyError, TypeError):
-            _LOGGER.error("Could not find country.")
-            return ""
+            return None
+        return country
 
     @property
-    def name(self) -> str:
+    def name(self) -> str | None:
         """Return the name."""
         try:
             return self.info["viewer"]["home"]["appNickname"]
         except (KeyError, TypeError):
-            return self.info["viewer"]["home"]["address"].get("address1", "")
+            return self.info["viewer"]["home"]["address"].get("address1")
 
     @property
-    def price_unit(self) -> str:
+    def price_unit(self) -> str | None:
         """Return the price unit (e.g. NOK/kWh)."""
         if not self.currency or not self.consumption_unit:
-            _LOGGER.error("Could not find price_unit.")
-            return ""
+            return None
         return self.currency + "/" + self.consumption_unit
 
     def current_price_rank(self, price_total: dict[str, float], price_time: dt.datetime | None) -> int | None:
@@ -558,7 +549,6 @@ class TibberHome:
             "",
         )
         if not (data := await self._execute(query, timeout=30)):
-            _LOGGER.error("Could not get the data.")
             return []
         data = data["viewer"]["home"][cons_or_prod_str]
         if data is None:
@@ -599,7 +589,6 @@ class TibberHome:
         )
 
         if not (data := await self._execute(query, timeout=30)):
-            _LOGGER.error("Could not get the data.")
             return []
 
         data = data["viewer"]["home"][cons_or_prod_str]
@@ -623,7 +612,6 @@ class TibberHome:
             resolution,
         )
         if not (data := await self._execute(query)):
-            _LOGGER.error("Could not get the price data.")
             return None
         return data["viewer"]["home"]["currentSubscription"]["priceRating"][resolution]["entries"]
 

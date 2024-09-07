@@ -60,7 +60,7 @@ class TibberREST:
                 timeout=aiohttp.ClientTimeout(total=timeout),
             )
             return (await extract_response_data(resp)).get("data")
-        except (TimeoutError, aiohttp.ClientError) as err:
+        except (TimeoutError, aiohttp.ClientError):
             if retry > 0:
                 return await self.execute(
                     document,
@@ -68,26 +68,6 @@ class TibberREST:
                     timeout,
                     retry - 1,
                 )
-            if isinstance(err, TimeoutError):
-                _LOGGER.error("Timed out when connecting to Tibber")
-            else:
-                _LOGGER.exception("Error connecting to Tibber")
-            raise
-        except (InvalidLoginError, FatalHttpExceptionError) as err:
-            _LOGGER.error(
-                "Fatal error interacting with Tibber API, HTTP status: %s. API error: %s / %s",
-                err.status,
-                err.extension_code,
-                err.message,
-            )
-            raise
-        except RetryableHttpExceptionError as err:
-            _LOGGER.warning(
-                "Temporary failure interacting with Tibber API, HTTP status: %s. API error: %s / %s",
-                err.status,
-                err.extension_code,
-                err.message,
-            )
             raise
 
     async def close_connection(self) -> None:
