@@ -406,16 +406,26 @@ class TibberHome:
                 return round(price_total, 3), self.price_level[key], price_time, price_rank
         return None, None, None, None
 
-    async def rt_subscribe(self, callback: Callable[..., Any]) -> None:
+    async def rt_subscribe(
+        self,
+        callback: Callable[..., Any],
+        *,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
         """Connect to Tibber and subscribe to Tibber real time subscription.
 
         :param callback: The function to call when data is received.
         """
         self._rt_callback = callback
         await self._tibber_control.ws.connect()
-        self._rt_listener = asyncio.create_task(self._start_listen(callback))
+        self._rt_listener = asyncio.create_task(self._start_listen(callback, on_error=on_error))
 
-    async def _start_listen(self, callback: Callable[..., Any]) -> None:
+    async def _start_listen(
+        self,
+        callback: Callable[..., Any],
+        *,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
         """Subscribe to Tibber."""
         try:
             async for _data in self._tibber_control.ws.subscribe(gql(LIVE_SUBSCRIBE % self.home_id)):
@@ -429,13 +439,16 @@ class TibberHome:
                 )
                 callback(data)
         except WebsocketReconnectedError:
-            self._rt_listener = asyncio.create_task(self._start_listen(callback))
-        except Exception as err:  # pylint: disable=broad-except
+            self._rt_listener = asyncio.create_task(self._start_listen(callback, on_error=on_error))
+        except Exception as err:  # noqa: BLE001
+            if on_error is not None:
+                on_error(err)
             if not isinstance(err, WebsocketTransportError):
-                _LOGGER.exception("Error in subscription")
+                level = logging.ERROR if on_error else logging.DEBUG
+                _LOGGER.log(level, "Error in subscription", exc_info=err)
             if self._resubscribe_task is not None:
                 self._resubscribe_task.cancel()
-            self._resubscribe_task = asyncio.create_task(self._rt_resubscribe(callback))
+            self._resubscribe_task = asyncio.create_task(self._rt_resubscribe(callback, on_error=on_error))
             self._rt_listener = None
 
     def _add_extra_data(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -486,7 +499,12 @@ class TibberHome:
         )
         await self._rt_resubscribe(self._rt_callback)
 
-    async def _rt_resubscribe(self, callback: Callable[..., Any]) -> None:
+    async def _rt_resubscribe(
+        self,
+        callback: Callable[..., Any],
+        *,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
         """Resubscribe to Tibber data."""
         self.rt_unsubscribe()
         if not self._tibber_control.ws.reconnecting_task_in_progress:
@@ -501,7 +519,7 @@ class TibberHome:
         # Update info to set websocket subscription url
         await self._tibber_control.update_info()
 
-        await self.rt_subscribe(callback)
+        await self.rt_subscribe(callback, on_error=on_error)
 
     def rt_unsubscribe(self) -> None:
         """Unsubscribe to Tibber data."""
