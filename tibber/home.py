@@ -431,12 +431,11 @@ class TibberHome:
                 callback(data)
         except WebsocketReconnectedError:
             self._rt_listener = asyncio.create_task(self._start_listen(callback, on_error=on_error))
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             if on_error is not None:
                 on_error(err)
-            if not isinstance(err, WebsocketTransportError):
-                level = logging.ERROR if on_error else logging.DEBUG
-                _LOGGER.log(level, "Error in subscription", exc_info=err)
+            if not isinstance(err, WebsocketTransportError) and not on_error:
+                _LOGGER.exception("Error in subscription")
             if self._resubscribe_task is not None:
                 self._resubscribe_task.cancel()
             self._resubscribe_task = asyncio.create_task(self._rt_resubscribe(callback, on_error=on_error))
