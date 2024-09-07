@@ -7,6 +7,7 @@ import base64
 import contextlib
 import datetime as dt
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from gql import gql
@@ -431,10 +432,10 @@ class TibberHome:
             self._rt_listener = asyncio.create_task(self._start_listen(callback))
         except Exception as err:  # pylint: disable=broad-except
             if not isinstance(err, WebsocketTransportError):
-                _LOGGER.exception("Error in rt_subscribe")
+                _LOGGER.exception("Error in subscription")
             if self._resubscribe_task is not None:
                 self._resubscribe_task.cancel()
-            self._resubscribe_task = asyncio.create_task(self.rt_resubscribe())
+            self._resubscribe_task = asyncio.create_task(self._rt_resubscribe(callback))
             self._rt_listener = None
 
     def _add_extra_data(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -471,10 +472,22 @@ class TibberHome:
         return data
 
     async def rt_resubscribe(self) -> None:
-        """Resubscribe to Tibber data."""
+        """Resubscribe to Tibber data.
+
+        Deprecated. Resubscription will happen automatically.
+        """
         if self._rt_callback is None:
             raise RuntimeError("No callback set for rt_resubscribe, call rt_subscribe first")
 
+        warnings.warn(
+            "TibberHome.rt_resubscribe is deprecated, resubscription will happen automatically",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        await self._rt_resubscribe(self._rt_callback)
+
+    async def _rt_resubscribe(self, callback: Callable[..., Any]) -> None:
+        """Resubscribe to Tibber data."""
         self.rt_unsubscribe()
         if not self._tibber_control.ws.reconnecting_task_in_progress:
             return
@@ -488,7 +501,7 @@ class TibberHome:
         # Update info to set websocket subscription url
         await self._tibber_control.update_info()
 
-        await self.rt_subscribe(self._rt_callback)
+        await self.rt_subscribe(callback)
 
     def rt_unsubscribe(self) -> None:
         """Unsubscribe to Tibber data."""
